@@ -3,221 +3,256 @@
 #include <cstdlib>
 #include <ctime>
 
-const char kWindowTitle[] = "6403";
-
-// 便利関数
-struct Vec2 {
+struct Vector2 {
     float x, y;
 };
 
-static float Length(const Vec2& v) { return std::sqrt(v.x * v.x + v.y * v.y); }
-static Vec2   Normalize(const Vec2& v) {
-    float l = Length(v);
-    if (l == 0.0f) return { 0, 0 };
-    return { v.x / l, v.y / l };
-}
-static Vec2   Sub(const Vec2& a, const Vec2& b) { return { a.x - b.x, a.y - b.y }; }
-static Vec2   Add(const Vec2& a, const Vec2& b) { return { a.x + b.x, a.y + b.y }; }
-static Vec2   Mul(const Vec2& a, float s) { return { a.x * s, a.y * s }; }
-static bool   CircleHit(const Vec2& p1, float r1, const Vec2& p2, float r2) {
-    float dx = p1.x - p2.x, dy = p1.y - p2.y;
-    float rr = (r1 + r2) * (r1 + r2);
-    return dx * dx + dy * dy <= rr;
-}
-
-// アリーナ（四角）の設定
-struct Arena {
-    int left, top, right, bottom;
-};
-
-// ラップ（境界を越えたら反対側へ）
-static void WrapPosition(Vec2& p, float radius, const Arena& a) {
-    if (p.x < a.left - radius)  p.x = (float)(a.right + radius);
-    if (p.x > a.right + radius) p.x = (float)(a.left - radius);
-    if (p.y < a.top - radius)   p.y = (float)(a.bottom + radius);
-    if (p.y > a.bottom + radius)p.y = (float)(a.top - radius);
-}
-
-// プレイヤー・敵・弾
 struct Player {
-    Vec2 pos;
-    float speed;
+    Vector2 pos;
     float radius;
     int hp;
 };
 
 struct Enemy {
-    Vec2 pos;
-    float speed;
+    Vector2 pos;
     float radius;
     int hp;
-    int level; // 倒すたびに少しずつ強くなる
+    int level;
+    float speed;
 };
 
 struct Bullet {
-    Vec2 pos, vel;
+    Vector2 pos;
+    Vector2 vel;
     float radius;
+    int damage;
     bool alive;
 };
 
+struct Upgrade {
+    const char* name;
+    const char* desc;
+};
+
+enum class GameState {
+    Playing,
+    ChoosingUpgrade,
+    GameOver
+};
+
+const int kWindowWidth = 1280;
+const int kWindowHeight = 720;
+const int kMaxBullets = 50;
+
+Player player;
+Enemy enemy;
+Bullet bullets[kMaxBullets];
+
+// 弾の基礎パラメータ（強化で増加）
+float bulletBaseRadius = 10.0f;
+int bulletBaseDamage = 1;
+float bulletBaseSpeed = 10.0f;
+
+// 強化候補
+Upgrade upgrades[3];
+int chosenUpgrade = -1;
+
+GameState gameState = GameState::Playing;
+
+struct Rect {
+    int left, top, right, bottom;
+} arena = { 100, 100, 1180, 620 };
+
+// 距離計算
+float Length(const Vector2& v) {
+    return std::sqrt(v.x * v.x + v.y * v.y);
+}
+
+Vector2 Normalize(const Vector2& v) {
+    float len = Length(v);
+    if (len == 0) return { 0,0 };
+    return { v.x / len, v.y / len };
+}
+
+// 敵の初期化
+void SpawnEnemy() {
+    enemy.pos = { (float)(rand() % (arena.right - arena.left) + arena.left),
+                  (float)(rand() % (arena.bottom - arena.top) + arena.top) };
+    enemy.radius = 30;
+    enemy.hp = 5 + enemy.level * 2;
+    enemy.level++;
+    enemy.speed = 2.0f + enemy.level * 0.3f;
+}
+
+// 弾発射
+void FireBullet(const Vector2& dir) {
+    for (int i = 0; i < kMaxBullets; i++) {
+        if (!bullets[i].alive) {
+            bullets[i].alive = true;
+            bullets[i].pos = player.pos;
+            bullets[i].vel = { dir.x * bulletBaseSpeed, dir.y * bulletBaseSpeed };
+            bullets[i].radius = bulletBaseRadius;
+            bullets[i].damage = bulletBaseDamage;
+            break;
+        }
+    }
+}
+
+// 強化候補生成
+void GenerateUpgrades() {
+    upgrades[0] = { "Size Up", "Bullet size +2" };
+    upgrades[1] = { "Power Up", "Bullet damage +1" };
+    upgrades[2] = { "Speed Up", "Bullet speed +2" };
+}
+
+// 強化適用
+void ApplyUpgrade(int index) {
+    if (index == 0) bulletBaseRadius += 2.0f;
+    else if (index == 1) bulletBaseDamage += 1;
+    else if (index == 2) bulletBaseSpeed += 2.0f;
+}
+
+const char kWindowTitle[] = "Bullet Upgrade Demo";
+
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
-    Novice::Initialize(kWindowTitle, 1280, 720);
-    std::srand((unsigned)std::time(nullptr));
+    Novice::Initialize(kWindowTitle, kWindowWidth, kWindowHeight);
+
+    srand((unsigned int)time(nullptr));
+
+    // 初期化
+    player = { {640, 360}, 20.0f, 20 };
+    enemy = { {400, 300}, 30.0f, 5, 1, 2.0f };
 
     char keys[256] = { 0 };
     char preKeys[256] = { 0 };
 
-    // アリーナはウィンドウ中央に大きめの四角
-    Arena arena{ 140, 60, 1140, 660 };
-
-    // プレイヤー初期化
-    Player player{};
-    player.pos = { (float)((arena.left + arena.right) / 2), (float)((arena.top + arena.bottom) / 2) };
-    player.speed = 6.0f;
-    player.radius = 14.0f;
-    player.hp = 5;
-
-    // 敵初期化
-    Enemy enemy{};
-    enemy.radius = 18.0f;
-    enemy.speed = 3.0f;
-    enemy.level = 0;
-    enemy.hp = 5;
-    enemy.pos = { (float)arena.left + 80.0f, (float)arena.top + 80.0f };
-
-    // 弾
-    const int kMaxBullets = 64;
-    Bullet bullets[kMaxBullets]{};
-    int shootCooldown = 0;
-
-    auto RespawnEnemy = [&](int bonusLevel) {
-        enemy.level += bonusLevel;
-        enemy.hp = 5 + enemy.level;                 // 少し硬く
-        enemy.speed = 3.0f + 0.2f * enemy.level;    // 少し速く
-        // 端のどこかに出す
-        int edge = std::rand() % 4;
-        switch (edge) {
-        case 0: enemy.pos = { (float)arena.left + 10.0f, (float)(arena.top + std::rand() % (arena.bottom - arena.top)) }; break;
-        case 1: enemy.pos = { (float)arena.right - 10.0f, (float)(arena.top + std::rand() % (arena.bottom - arena.top)) }; break;
-        case 2: enemy.pos = { (float)(arena.left + std::rand() % (arena.right - arena.left)), (float)arena.top + 10.0f }; break;
-        case 3: enemy.pos = { (float)(arena.left + std::rand() % (arena.right - arena.left)), (float)arena.bottom - 10.0f }; break;
-        }
-        };
-
-    auto ResetGame = [&]() {
-        player.pos = { (float)((arena.left + arena.right) / 2), (float)((arena.top + arena.bottom) / 2) };
-        player.hp = 5;
-        enemy.level = 0;
-        enemy.speed = 3.0f;
-        enemy.hp = 5;
-        enemy.pos = { (float)arena.left + 80.0f, (float)arena.top + 80.0f };
-        for (auto& b : bullets) b.alive = false;
-        };
-
-    // ループ
     while (Novice::ProcessMessage() == 0) {
         Novice::BeginFrame();
+
         memcpy(preKeys, keys, 256);
         Novice::GetHitKeyStateAll(keys);
 
         // ===== 更新 =====
-        // 入力（移動）
-        Vec2 move{ 0,0 };
-        if (keys[DIK_W] || keys[DIK_UP])    move.y -= 1.0f;
-        if (keys[DIK_S] || keys[DIK_DOWN])  move.y += 1.0f;
-        if (keys[DIK_A] || keys[DIK_LEFT])  move.x -= 1.0f;
-        if (keys[DIK_D] || keys[DIK_RIGHT]) move.x += 1.0f;
-        move = Normalize(move);
-        player.pos = Add(player.pos, Mul(move, player.speed));
+        if (gameState == GameState::Playing) {
+            // 移動
+            if (keys[DIK_W]) player.pos.y -= 5;
+            if (keys[DIK_S]) player.pos.y += 5;
+            if (keys[DIK_A]) player.pos.x -= 5;
+            if (keys[DIK_D]) player.pos.x += 5;
 
-        // シュート（スペース）
-        if (shootCooldown > 0) shootCooldown--;
-        if (preKeys[DIK_SPACE] == 0 && keys[DIK_SPACE] != 0 && shootCooldown == 0) {
-            // マウス方向に撃つ
+            // ★ プレイヤーのワープ処理 ★
+            if (player.pos.x < arena.left) player.pos.x = (float)arena.right;
+            if (player.pos.x > arena.right) player.pos.x = (float)arena.left;
+            if (player.pos.y < arena.top) player.pos.y = (float)arena.bottom;
+            if (player.pos.y > arena.bottom) player.pos.y = (float)arena.top;
+
+            // マウス位置
             int mx, my;
             Novice::GetMousePosition(&mx, &my);
-            Vec2 dir = Normalize(Sub(Vec2{ (float)mx, (float)my }, player.pos));
-            if (dir.x != 0.0f || dir.y != 0.0f) {
-                for (int i = 0; i < kMaxBullets; ++i) {
-                    if (!bullets[i].alive) {
-                        bullets[i].alive = true;
-                        bullets[i].pos = Add(player.pos, Mul(dir, player.radius + 4.0f));
-                        bullets[i].vel = Mul(dir, 12.0f);
-                        bullets[i].radius = 6.0f;
-                        shootCooldown = 6; // 連射間隔
-                        break;
+            Vector2 aimDir = { mx - player.pos.x, my - player.pos.y };
+            aimDir = Normalize(aimDir);
+
+            // 射撃
+            if (keys[DIK_SPACE] && !preKeys[DIK_SPACE]) {
+                FireBullet(aimDir);
+            }
+
+            // 弾更新
+            for (int i = 0; i < kMaxBullets; i++) {
+                if (!bullets[i].alive) continue;
+                bullets[i].pos.x += bullets[i].vel.x;
+                bullets[i].pos.y += bullets[i].vel.y;
+                if (bullets[i].pos.x < arena.left || bullets[i].pos.x > arena.right ||
+                    bullets[i].pos.y < arena.top || bullets[i].pos.y > arena.bottom) {
+                    bullets[i].alive = false;
+                }
+                // 当たり判定
+                float dx = bullets[i].pos.x - enemy.pos.x;
+                float dy = bullets[i].pos.y - enemy.pos.y;
+                float dist = std::sqrt(dx * dx + dy * dy);
+                if (dist < bullets[i].radius + enemy.radius) {
+                    enemy.hp -= bullets[i].damage;
+                    bullets[i].alive = false;
+                    if (enemy.hp <= 0) {
+                        gameState = GameState::ChoosingUpgrade;
+                        GenerateUpgrades();
                     }
                 }
             }
-        }
 
-        // 敵AI：プレイヤーに向かう
-        Vec2 toPlayer = Sub(player.pos, enemy.pos);
-        Vec2 dirTo = Normalize(toPlayer);
-        enemy.pos = Add(enemy.pos, Mul(dirTo, enemy.speed));
+            // 敵移動
+            Vector2 dir = { player.pos.x - enemy.pos.x, player.pos.y - enemy.pos.y };
+            dir = Normalize(dir);
+            enemy.pos.x += dir.x * enemy.speed;
+            enemy.pos.y += dir.y * enemy.speed;
 
-        // ラップ（境界超え→反対側）
-        WrapPosition(player.pos, player.radius, arena);
-        WrapPosition(enemy.pos, enemy.radius, arena);
-        for (int i = 0; i < kMaxBullets; ++i) {
-            if (!bullets[i].alive) continue;
-            bullets[i].pos = Add(bullets[i].pos, bullets[i].vel);
-            WrapPosition(bullets[i].pos, bullets[i].radius, arena);
-        }
-
-        // 弾と敵の当たり判定
-        for (int i = 0; i < kMaxBullets; ++i) {
-            if (!bullets[i].alive) continue;
-            if (CircleHit(bullets[i].pos, bullets[i].radius, enemy.pos, enemy.radius)) {
-                bullets[i].alive = false;
-                enemy.hp--;
-                if (enemy.hp <= 0) {
-                    RespawnEnemy(1); // 倒すと強くなって再出現
-                }
+            // 敵攻撃
+            float dx = player.pos.x - enemy.pos.x;
+            float dy = player.pos.y - enemy.pos.y;
+            float dist = std::sqrt(dx * dx + dy * dy);
+            if (dist < player.radius + enemy.radius) {
+                player.hp--;
+                if (player.hp <= 0) gameState = GameState::GameOver;
             }
         }
-
-        // 敵とプレイヤーの当たり判定（触れるとダメージ＆ノックバック）
-        if (CircleHit(player.pos, player.radius, enemy.pos, enemy.radius)) {
-            player.hp--;
-            Vec2 away = Normalize(Sub(player.pos, enemy.pos));
-            player.pos = Add(player.pos, Mul(away, 24.0f));
-            if (player.hp <= 0) {
-                // リセット
-                ResetGame();
+        else if (gameState == GameState::ChoosingUpgrade) {
+            if (keys[DIK_1] && !preKeys[DIK_1]) {
+                ApplyUpgrade(0);
+                SpawnEnemy();
+                gameState = GameState::Playing;
+            }
+            if (keys[DIK_2] && !preKeys[DIK_2]) {
+                ApplyUpgrade(1);
+                SpawnEnemy();
+                gameState = GameState::Playing;
+            }
+            if (keys[DIK_3] && !preKeys[DIK_3]) {
+                ApplyUpgrade(2);
+                SpawnEnemy();
+                gameState = GameState::Playing;
             }
         }
 
         // ===== 描画 =====
-        // 背景
-        Novice::DrawBox(0, 0, 1280, 720, 0.0f, 0x101018FF, kFillModeSolid);
-
-        // アリーナ（四角い境界）
+        Novice::DrawBox(0, 0, kWindowWidth, kWindowHeight, 0.0f, 0x101018FF, kFillModeSolid);
         Novice::DrawBox(arena.left, arena.top, arena.right - arena.left, arena.bottom - arena.top, 0.0f, 0xFFFFFFFF, kFillModeWireFrame);
 
-        // プレイヤー
-        Novice::DrawEllipse((int)player.pos.x, (int)player.pos.y, (int)player.radius, (int)player.radius, 0.0f, 0x44CCFFFF, kFillModeSolid);
+        if (gameState == GameState::Playing) {
+            // プレイヤー
+            Novice::DrawEllipse((int)player.pos.x, (int)player.pos.y, (int)player.radius, (int)player.radius, 0.0f, 0x44CCFFFF, kFillModeSolid);
 
-        // 敵
-        Novice::DrawEllipse((int)enemy.pos.x, (int)enemy.pos.y, (int)enemy.radius, (int)enemy.radius, 0.0f, 0xFF4444FF, kFillModeSolid);
+            // 敵
+            Novice::DrawEllipse((int)enemy.pos.x, (int)enemy.pos.y, (int)enemy.radius, (int)enemy.radius, 0.0f, 0xFF4444FF, kFillModeSolid);
 
-        // 弾
-        for (int i = 0; i < kMaxBullets; ++i) {
-            if (!bullets[i].alive) continue;
-            Novice::DrawEllipse((int)bullets[i].pos.x, (int)bullets[i].pos.y, (int)bullets[i].radius, (int)bullets[i].radius, 0.0f, 0xFFFFFFFF, kFillModeSolid);
+            // 弾
+            for (int i = 0; i < kMaxBullets; i++) {
+                if (!bullets[i].alive) continue;
+                Novice::DrawEllipse((int)bullets[i].pos.x, (int)bullets[i].pos.y, (int)bullets[i].radius, (int)bullets[i].radius, 0.0f, 0xFFFFFFFF, kFillModeSolid);
+            }
+
+            // UI
+            Novice::ScreenPrintf(20, 20, "WASD: Move   Mouse: Aim   Space: Shoot");
+            Novice::ScreenPrintf(20, 40, "Player HP: %d", player.hp);
+            Novice::ScreenPrintf(20, 60, "Enemy HP: %d  LV: %d  SPD: %.1f", enemy.hp, enemy.level, enemy.speed);
+
+            // 弾ステータス
+            Novice::ScreenPrintf(20, 680, "Bullet Status:");
+            Novice::ScreenPrintf(40, 700, "Size: %.1f", bulletBaseRadius);
+            Novice::ScreenPrintf(160, 700, "Damage: %d", bulletBaseDamage);
+            Novice::ScreenPrintf(320, 700, "Speed: %.1f", bulletBaseSpeed);
+        }
+        else if (gameState == GameState::ChoosingUpgrade) {
+            Novice::DrawBox(200, 200, 880, 300, 0.0f, 0x000000C0, kFillModeSolid);
+            Novice::ScreenPrintf(220, 220, "Choose Upgrade! (Press 1,2,3)");
+            for (int i = 0; i < 3; i++) {
+                Novice::ScreenPrintf(240, 260 + i * 40, "%d: %s - %s", i + 1, upgrades[i].name, upgrades[i].desc);
+            }
+        }
+        else if (gameState == GameState::GameOver) {
+            Novice::ScreenPrintf(600, 360, "GAME OVER");
         }
 
-        // UI
-        Novice::ScreenPrintf(20, 20, "WASD/Arrow: Move");
-        Novice::ScreenPrintf(20, 40, "Mouse: Aim   Space: Shoot");
-        Novice::ScreenPrintf(20, 60, "Wrap: Leave the box -> appear from the opposite side");
-        Novice::ScreenPrintf(20, 90, "Player HP: %d", player.hp);
-        Novice::ScreenPrintf(20, 110, "Enemy HP: %d  LV: %d  SPD: %.1f", enemy.hp, enemy.level, enemy.speed);
-
         Novice::EndFrame();
-
-        // ESC で終了
-        if (preKeys[DIK_ESCAPE] == 0 && keys[DIK_ESCAPE] != 0) break;
     }
 
     Novice::Finalize();
